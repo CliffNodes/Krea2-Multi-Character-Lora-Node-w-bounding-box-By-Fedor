@@ -250,6 +250,7 @@ class _RegionalSession:
         self.blend_override = blend_override
         self.canvas_w, self.canvas_h = canvas_w, canvas_h
         self.n_img = 0
+        self._txtlen = None
         self._layer_map = None
         self._prepared = False
         self._full_mask_cache = {}
@@ -331,8 +332,11 @@ class _RegionalSession:
 
     def _full_mask(self, ridx, seq, ndim):
         """Full-sequence mask: zeros over the text prefix, region mask over the
-        trailing image-token block ([text | image], per Krea2)."""
-        key = (ridx, seq, ndim)
+        image-token block. Krea2's combined sequence is [text | image (| pad)];
+        we place the mask at [txtlen : txtlen + n_img] when the text length is
+        known, and fall back to the trailing block otherwise (which is exact on
+        the current ComfyUI port, where the sequence is not padded)."""
+        key = (ridx, seq, ndim, self._txtlen)
         fm = self._full_mask_cache.get(key)
         if fm is None:
             mv = self._masks_d[ridx]
@@ -341,15 +345,32 @@ class _RegionalSession:
             if n_img <= 0 or n_img > seq:
                 base[:] = mv.mean()
             else:
-                base[seq - n_img:] = mv
+                start = seq - n_img  # trailing block (correct when unpadded)
+                if self._txtlen is not None and 0 <= self._txtlen <= seq - n_img:
+                    start = self._txtlen  # exact image span, padding-safe
+                base[start:start + n_img] = mv
             fm = base.view(*([1] * (ndim - 2)), seq, 1)
             self._full_mask_cache[key] = fm
         return fm
+
+    def _extract_txtlen(self, args, kwargs):
+        """Text-token count from the diffusion model's `context` arg.
+        Krea2's forward is (x, timesteps, context, ...); context is
+        (B, txt_seq, features). Returns None if it can't be identified."""
+        ctx = None
+        if len(args) >= 3 and torch.is_tensor(args[2]) and args[2].dim() == 3:
+            ctx = args[2]
+        elif torch.is_tensor(kwargs.get("context")) and kwargs["context"].dim() == 3:
+            ctx = kwargs["context"]
+        if ctx is not None:
+            return int(ctx.shape[1])
+        return None
 
     def run(self, executor, *args, **kwargs):
         dm = self._diffusion_model()
         if self._layer_map is None:
             self._layer_map = self._build_layer_map(dm)
+        self._txtlen = self._extract_txtlen(args, kwargs)
         if not self._prepared:
             dev = self._infer_device(dm, args)
             x0 = args[0] if args else None
