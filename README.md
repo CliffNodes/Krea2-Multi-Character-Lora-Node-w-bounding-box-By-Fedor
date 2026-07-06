@@ -1,8 +1,12 @@
 # ComfyUI Krea2 Regional Multi-LoRA
 
-**Put multiple character LoRAs in one image — each one locked to its own box.**
+**Put multiple character LoRAs in one image — each one locked to its own box. Plus full bounding-box layout control for objects and any non-LoRA element.**
 
 Draw a box for each character, assign a LoRA to each box, and this node guarantees that LoRA A only affects region A and LoRA B only affects region B. No bleed, no merged faces, no averaging. Works with two characters, three, four — as many as you want to draw boxes for.
+
+And it isn't just for LoRAs: paired with the Ideogram 4-style prompt builder, you get **per-box control over everything else in the scene too** — objects, props, backgrounds, secondary subjects. Krea 2 responds to those positional box prompts the same way Ideogram 4 does, so you can lay out an entire composition by drawing and describing boxes, then drop character LoRAs into whichever boxes need a specific identity.
+
+![Multi-character regional LoRA example workflow](assets/example_multi_character.png)
 
 ---
 
@@ -52,10 +56,20 @@ There is no mathematical path for the LoRA to affect anything outside its region
 ## Features
 
 - **Unlimited regions.** Two characters or ten — add a row per character. No code changes, no fixed slots.
+- **Bounding-box control for non-LoRA elements too.** Objects, props, backgrounds, extra people — anything you can describe. Draw a box, describe it, and Krea 2 places it there, exactly like Ideogram 4's bounding-box prompting. LoRAs and plain object boxes coexist in the same layout.
 - **Auto-syncing rows.** Wire a bounding-box builder into the node and the region rows appear and disappear automatically as you draw or delete boxes. Your LoRA picks are preserved when the count changes.
 - **Hard spatial masking.** Activation-delta injection, not attention bias. LoRAs cannot cross their box boundary.
 - **fp8-safe.** Never modifies quantized model weights; injects at forward time.
 - **CLIP passes through untouched.** The regional effect is UNet-side, exactly where identity lives.
+
+## Full Layout Control — Not Just LoRAs
+
+The bounding boxes drive two independent things at once:
+
+1. **Layout / content (every box).** Each box you draw in the prompt builder carries a description, and those descriptions become a positional prompt fed to Krea 2's Qwen3-VL text encoder — the same natural, on-distribution format Ideogram 4 was built around. That means a box doesn't *have* to be a character LoRA. It can be "a wooden table," "a neon sign in the background," "a dog sitting on the left." Krea 2 honors the placement.
+2. **Identity (LoRA boxes only).** For any box you also assign a LoRA to, this node hard-masks that LoRA's effect to the box on top of the layout prompt — locking in a specific trained identity where the prompt alone can't.
+
+So the workflow is a single, unified layout tool: sketch the whole scene as boxes, describe each one, and reinforce the boxes that need a precise identity with a LoRA. Objects and characters, all placed by the same boxes, responding the way Ideogram 4 bounding-box prompts do.
 
 ---
 
