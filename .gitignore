@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
+*.safetensors
+*.ckpt
+*.pt

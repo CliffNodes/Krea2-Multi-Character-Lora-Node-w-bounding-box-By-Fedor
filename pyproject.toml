@@ -1,0 +1,18 @@
+[project]
+name = "comfyui-krea2-regional-multilora"
+description = "Regional multi-LoRA for Krea 2 - constrain each character LoRA to its own bounding box via masked activation-delta injection."
+version = "1.0.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "safetensors",
+]
+
+[project.urls]
+Repository = "https://github.com/CliffNodes/ComfyUI-Krea2-Regional-MultiLoRA"
+
+[tool.comfy]
+PublisherId = "CliffNodes"
+DisplayName = "Krea2 Regional Multi-LoRA"
+Icon = ""

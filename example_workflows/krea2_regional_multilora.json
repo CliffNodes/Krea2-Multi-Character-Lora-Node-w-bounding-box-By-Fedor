@@ -1,0 +1,312 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "revision": 0,
+  "last_node_id": 100,
+  "last_link_id": 19,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [-1500, -400],
+      "size": [360, 82],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}],
+      "properties": {"Node name for S&R": "UNETLoader"},
+      "widgets_values": ["krea2_turbo_bf16.safetensors", "default"],
+      "title": "1. Krea 2 Turbo UNet",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 2,
+      "type": "CLIPLoader",
+      "pos": [-1500, -260],
+      "size": [360, 106],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{"name": "CLIP", "type": "CLIP", "links": [2]}],
+      "properties": {"Node name for S&R": "CLIPLoader"},
+      "widgets_values": ["qwen3vl_4b_bf16.safetensors", "krea2", "default"],
+      "title": "2. Qwen3-VL Text Encoder",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [-1500, -100],
+      "size": [360, 58],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{"name": "VAE", "type": "VAE", "links": [18]}],
+      "properties": {"Node name for S&R": "VAELoader"},
+      "widgets_values": ["qwen_image_vae.safetensors"],
+      "title": "3. VAE",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 5,
+      "type": "LoraLoader",
+      "pos": [-1080, -400],
+      "size": [340, 130],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 1},
+        {"name": "clip", "type": "CLIP", "link": 2}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": [3]},
+        {"name": "CLIP", "type": "CLIP", "links": [4]}
+      ],
+      "properties": {"Node name for S&R": "LoraLoader"},
+      "widgets_values": ["your_global_lora.safetensors", 0.0, 1.0],
+      "title": "4. Optional global LoRA (set strength 0 to skip)",
+      "color": "#432",
+      "bgcolor": "#210"
+    },
+    {
+      "id": 20,
+      "type": "Ideogram4PromptBuilderKJ",
+      "pos": [-700, -400],
+      "size": [520, 720],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": null, "shape": 7},
+        {"name": "import_json", "type": "STRING", "link": null, "shape": 7, "widget": {"name": "import_json"}},
+        {"name": "bboxes", "type": "BOUNDING_BOX", "link": null, "shape": 7}
+      ],
+      "outputs": [
+        {"name": "prompt", "type": "STRING", "links": [9]},
+        {"name": "preview", "type": "IMAGE", "links": []},
+        {"name": "bboxes", "type": "BOUNDING_BOX", "links": [5]},
+        {"name": "width", "type": "INT", "links": [6, 11]},
+        {"name": "height", "type": "INT", "links": [7, 12]}
+      ],
+      "properties": {"Node name for S&R": "Ideogram4PromptBuilderKJ"},
+      "widgets_values": [
+        1024,
+        1024,
+        "a single candid photograph of two people standing together",
+        "natural outdoor lighting, continuous background, shallow depth of field",
+        "none",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "[{\"type\": \"obj\", \"text\": \"\", \"desc\": \"person on the left\", \"palette\": [], \"x\": 0.05, \"y\": 0.1, \"w\": 0.4, \"h\": 0.85}, {\"type\": \"obj\", \"text\": \"\", \"desc\": \"person on the right\", \"palette\": [], \"x\": 0.55, \"y\": 0.1, \"w\": 0.4, \"h\": 0.85}]",
+        25,
+        "when empty",
+        "compact"
+      ],
+      "title": "5. Prompt Builder \u2014 draw one box per character (order = region order)",
+      "color": "#226",
+      "bgcolor": "#114"
+    },
+    {
+      "id": 100,
+      "type": "Krea2RegionalMultiLoRA",
+      "pos": [-120, -400],
+      "size": [460, 420],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 3},
+        {"name": "clip", "type": "CLIP", "link": 4},
+        {"name": "canvas_width", "type": "INT", "link": 6, "widget": {"name": "canvas_width"}},
+        {"name": "canvas_height", "type": "INT", "link": 7, "widget": {"name": "canvas_height"}},
+        {"name": "bboxes", "type": "BOUNDING_BOX", "link": 5, "shape": 7}
+      ],
+      "outputs": [
+        {"name": "model", "type": "MODEL", "links": [13]},
+        {"name": "clip", "type": "CLIP", "links": [8]},
+        {"name": "masks", "type": "KREA2_MASKS", "links": []},
+        {"name": "data", "type": "KREA2_DATA", "links": []}
+      ],
+      "properties": {"Node name for S&R": "Krea2RegionalMultiLoRA"},
+      "widgets_values": [
+        1024,
+        1024,
+        "[\n  {\n    \"lora\": \"character_A.safetensors\",\n    \"strength\": 1.0,\n    \"enable\": true\n  },\n  {\n    \"lora\": \"character_B.safetensors\",\n    \"strength\": 1.0,\n    \"enable\": true\n  }\n]",
+        "bbox",
+        0.08,
+        0.0,
+        1.0,
+        true
+      ],
+      "title": "6. Krea2 Regional Multi-LoRA (rows auto-sync to boxes)",
+      "color": "#2a2",
+      "bgcolor": "#040"
+    },
+    {
+      "id": 50,
+      "type": "CLIPTextEncode",
+      "pos": [380, -60],
+      "size": [380, 100],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "clip", "type": "CLIP", "link": 8},
+        {"name": "text", "type": "STRING", "link": 9, "widget": {"name": "text"}}
+      ],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "links": [10, 14]}],
+      "properties": {"Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": [""],
+      "title": "7. Positive (auto-wired from Prompt Builder)",
+      "color": "#226",
+      "bgcolor": "#114"
+    },
+    {
+      "id": 51,
+      "type": "ConditioningZeroOut",
+      "pos": [380, 80],
+      "size": [380, 50],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [{"name": "conditioning", "type": "CONDITIONING", "link": 10}],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "links": [15]}],
+      "properties": {"Node name for S&R": "ConditioningZeroOut"},
+      "widgets_values": [],
+      "title": "8. Negative (zero-out \u2014 Krea2 runs CFG=1)",
+      "color": "#622",
+      "bgcolor": "#411"
+    },
+    {
+      "id": 60,
+      "type": "EmptyLatentImage",
+      "pos": [-120, 80],
+      "size": [280, 106],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "width", "type": "INT", "link": 11, "widget": {"name": "width"}},
+        {"name": "height", "type": "INT", "link": 12, "widget": {"name": "height"}},
+        {"name": "batch_size", "type": "INT", "link": null, "widget": {"name": "batch_size"}, "shape": 7}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "links": [16]}],
+      "properties": {"Node name for S&R": "EmptyLatentImage"},
+      "widgets_values": [1024, 1024, 1],
+      "title": "9. Latent (auto-sized from Prompt Builder)",
+      "color": "#226",
+      "bgcolor": "#114"
+    },
+    {
+      "id": 70,
+      "type": "KSampler",
+      "pos": [820, -400],
+      "size": [380, 262],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 13},
+        {"name": "positive", "type": "CONDITIONING", "link": 14},
+        {"name": "negative", "type": "CONDITIONING", "link": 15},
+        {"name": "latent_image", "type": "LATENT", "link": 16}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "links": [17]}],
+      "properties": {"Node name for S&R": "KSampler"},
+      "widgets_values": [0, "randomize", 9, 1.0, "euler", "bong_tangent", 1.0],
+      "title": "10. KSampler (euler / bong_tangent / steps 9 / CFG 1)",
+      "color": "#262",
+      "bgcolor": "#040"
+    },
+    {
+      "id": 80,
+      "type": "VAEDecode",
+      "pos": [1250, -400],
+      "size": [220, 46],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {"name": "samples", "type": "LATENT", "link": 17},
+        {"name": "vae", "type": "VAE", "link": 18}
+      ],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [19]}],
+      "properties": {"Node name for S&R": "VAEDecode"},
+      "widgets_values": [],
+      "title": "11. Decode",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 81,
+      "type": "SaveImage",
+      "pos": [1520, -400],
+      "size": [380, 270],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [{"name": "images", "type": "IMAGE", "link": 19}],
+      "outputs": [],
+      "properties": {"Node name for S&R": "SaveImage"},
+      "widgets_values": ["krea2_regional_multilora"],
+      "title": "12. Save",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 90,
+      "type": "Note",
+      "pos": [-1500, 20],
+      "size": [440, 460],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {"Node name for S&R": "Note"},
+      "widgets_values": [
+        "Krea2 Regional Multi-LoRA\n==========================\nEach LoRA's activation delta is injected AT FORWARD TIME only into\nthe image tokens inside its bounding box. A LoRA physically cannot\nact outside its region.\n\nHOW TO USE:\n  1. Node 4 - optional global LoRA (strength 0 = skip).\n  2. Node 5 - write the scene prompt, then draw one box per\n     character, in order (left to right). As you draw, region rows\n     appear automatically in Node 6.\n  3. Node 6 - pick the LoRA for each row. Row 1 -> box 1, etc.\n  4. Queue.\n\nMODELS:\n  UNet : krea2_turbo_bf16.safetensors\n  CLIP : qwen3vl_4b_bf16.safetensors  (CLIPLoader type=krea2)\n  VAE  : qwen_image_vae.safetensors\n\nSETTINGS (Node 6):\n  split_mode     bbox  = use drawn boxes\n  seam_feather   0.08  = edge softness (raise if seams show)\n  blend_override 0     = clean split (keep at 0)\n\nSampler: euler / bong_tangent / 9 steps / CFG 1."
+      ],
+      "title": "README \u2014 read first",
+      "color": "#444",
+      "bgcolor": "#222"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 5, 0, "MODEL"],
+    [2, 2, 0, 5, 1, "CLIP"],
+    [3, 5, 0, 100, 0, "MODEL"],
+    [4, 5, 1, 100, 1, "CLIP"],
+    [5, 20, 2, 100, 4, "BOUNDING_BOX"],
+    [6, 20, 3, 100, 2, "INT"],
+    [7, 20, 4, 100, 3, "INT"],
+    [8, 100, 1, 50, 0, "CLIP"],
+    [9, 20, 0, 50, 1, "STRING"],
+    [10, 50, 0, 51, 0, "CONDITIONING"],
+    [11, 20, 3, 60, 0, "INT"],
+    [12, 20, 4, 60, 1, "INT"],
+    [13, 100, 0, 70, 0, "MODEL"],
+    [14, 50, 0, 70, 1, "CONDITIONING"],
+    [15, 51, 0, 70, 2, "CONDITIONING"],
+    [16, 60, 0, 70, 3, "LATENT"],
+    [17, 70, 0, 80, 0, "LATENT"],
+    [18, 3, 0, 80, 1, "VAE"],
+    [19, 80, 0, 81, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {"scale": 0.5, "offset": [1600, 520]},
+    "frontendVersion": "1.45.20"
+  },
+  "version": 0.4
+}
