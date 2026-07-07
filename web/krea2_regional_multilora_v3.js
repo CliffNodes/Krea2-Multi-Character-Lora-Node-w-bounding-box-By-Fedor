@@ -206,17 +206,28 @@ function makeRefWidget(node, idx, region) {
 // Bbox auto-sync (same heuristic as v1)
 // ---------------------------------------------------------------------------
 
+// Read the builder's LIVE box array (`_boxes`) - updates immediately on
+// create/delete and is length 0 when the last box is removed (the serialized
+// STRING widget becomes "" at zero, which is why parsing it could never sync
+// down). Falls back to a box-array STRING widget for other builders.
 function getBboxCount(node) {
   const bboxInput = node.inputs?.find((i) => i.name === "bboxes");
-  if (!bboxInput?.link) return null;
+  if (!bboxInput || bboxInput.link == null) return null;
   const linkInfo = node.graph?.links?.[bboxInput.link];
   if (!linkInfo) return null;
   const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
   if (!srcNode) return null;
+
+  if (Array.isArray(srcNode._boxes)) {
+    return srcNode._boxes.length;
+  }
+
   for (const w of srcNode.widgets || []) {
     if (typeof w.value !== "string") continue;
+    const s = w.value.trim();
+    if (s === "") continue;
     try {
-      const parsed = JSON.parse(w.value);
+      const parsed = JSON.parse(s);
       if (
         Array.isArray(parsed) &&
         parsed.length > 0 &&
@@ -240,6 +251,45 @@ function syncRegionCount(node, targetCount) {
   }
   writeRegions(node, regions);
   rebuildRows(node);
+}
+
+// Single sync entry point with a load-race guard (don't clear rows to zero
+// while a connected builder is still restoring its boxes on graph load).
+function checkAndSync(node) {
+  const count = getBboxCount(node);
+  if (count === null) return;
+  if (count === node.__k2lastBboxCount) return;
+  if (
+    count === 0 &&
+    readRegions(node).length > 0 &&
+    node.__k2loadGuardUntil &&
+    Date.now() < node.__k2loadGuardUntil
+  ) {
+    return;
+  }
+  node.__k2lastBboxCount = count;
+  syncRegionCount(node, count);
+}
+
+// Global backstop: builder edits (create/move on mouseup, delete on Del/Backspace)
+// don't reliably repaint our node, so re-check on those events. Once per page.
+function installGlobalResync(app) {
+  if (window.__k2v3RegionSyncHooked) return;
+  window.__k2v3RegionSyncHooked = true;
+  const resyncAll = () => {
+    const nodes = app.graph?._nodes || [];
+    for (const n of nodes) {
+      if (n.type === NODE_TYPE) checkAndSync(n);
+    }
+  };
+  window.addEventListener("mouseup", () => setTimeout(resyncAll, 0), true);
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (e.key === "Delete" || e.key === "Backspace") setTimeout(resyncAll, 0);
+    },
+    true
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +371,7 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name !== NODE_TYPE) return;
     await ensureLoraList();
+    installGlobalResync(app);
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
@@ -343,6 +394,7 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function (o) {
       const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
       this.__k2lastBboxCount = null;
+      this.__k2loadGuardUntil = Date.now() + 2500;
       setTimeout(() => rebuildRows(this), 0);
       return r;
     };
@@ -355,13 +407,8 @@ app.registerExtension({
       const bboxIdx = this.inputs?.findIndex((i) => i.name === "bboxes");
       if (index === bboxIdx) {
         this.__k2lastBboxCount = null;
-        setTimeout(() => {
-          const count = getBboxCount(this);
-          if (count !== null) {
-            this.__k2lastBboxCount = count;
-            syncRegionCount(this, count);
-          }
-        }, 50);
+        if (connected) this.__k2loadGuardUntil = 0;
+        setTimeout(() => checkAndSync(this), 50);
       }
       return r;
     };
@@ -369,11 +416,7 @@ app.registerExtension({
     const onDrawForeground = nodeType.prototype.onDrawForeground;
     nodeType.prototype.onDrawForeground = function (ctx) {
       if (onDrawForeground) onDrawForeground.apply(this, arguments);
-      const count = getBboxCount(this);
-      if (count !== null && count !== this.__k2lastBboxCount) {
-        this.__k2lastBboxCount = count;
-        syncRegionCount(this, count);
-      }
+      checkAndSync(this);
     };
   },
 });

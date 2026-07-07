@@ -1,11 +1,11 @@
-// Krea2 Regional Multi-LoRA (By Fedor) - dynamic region rows.
+// Krea2 Regional Multi-LoRA - dynamic region rows.
 //
 // Adds an "+ Add Region" button and, per region, a LoRA combo + strength +
 // enable toggle + remove button. All rows are serialized into the node's
 // `regions_json` widget (the Python side's source of truth), so the graph
 // still round-trips through save/load and the API.
 //
-// Auto-sync: when a bounding-box builder is wired into the bboxes input, the
+// Auto-sync: when a Prompt Builder node is wired into the bboxes input, the
 // region row count automatically follows the number of boxes drawn there.
 // Existing LoRA assignments are preserved; only the count changes.
 
@@ -63,10 +63,16 @@ function markTransient(w) {
 // ---------------------------------------------------------------------------
 
 // Return the number of boxes in the node wired to our bboxes input, or null
-// if nothing is wired or the source can't be parsed.
+// if nothing is wired / no box source can be found.
+//
+// The Ideogram4PromptBuilderKJ keeps a LIVE array on the node (`_boxes`) that
+// updates the instant a box is created or deleted - and is length 0 when the
+// last box is removed. Reading it directly is what makes the sync immediate and
+// lets us detect the drop to zero (the serialized STRING widget becomes "" at
+// zero boxes, which is why the old string-parsing path could never sync down).
 function getBboxCount(node) {
   const bboxInput = node.inputs?.find((i) => i.name === "bboxes");
-  if (!bboxInput?.link) return null;
+  if (!bboxInput || bboxInput.link == null) return null;
 
   const linkInfo = node.graph?.links?.[bboxInput.link];
   if (!linkInfo) return null;
@@ -74,12 +80,18 @@ function getBboxCount(node) {
   const srcNode = node.graph?.getNodeById(linkInfo.origin_id);
   if (!srcNode) return null;
 
-  // Find the source widget whose value parses to an array of box objects
-  // (objects with spatial keys x / x0 / w / width).
+  // Preferred: the builder's live box array.
+  if (Array.isArray(srcNode._boxes)) {
+    return srcNode._boxes.length;
+  }
+
+  // Fallback: a STRING widget holding an array of box objects (other builders).
   for (const w of srcNode.widgets || []) {
     if (typeof w.value !== "string") continue;
+    const s = w.value.trim();
+    if (s === "") continue;
     try {
-      const parsed = JSON.parse(w.value);
+      const parsed = JSON.parse(s);
       if (
         Array.isArray(parsed) &&
         parsed.length > 0 &&
@@ -97,7 +109,7 @@ function getBboxCount(node) {
 // existing LoRA assignments. New rows get sensible defaults.
 function syncRegionCount(node, targetCount) {
   const regions = readRegions(node);
-  if (regions.length === targetCount) return;
+  if (regions.length === targetCount) return; // nothing to do
 
   if (regions.length < targetCount) {
     while (regions.length < targetCount) {
@@ -109,6 +121,51 @@ function syncRegionCount(node, targetCount) {
 
   writeRegions(node, regions);
   rebuildRows(node);
+}
+
+// Single entry point used by every trigger (draw / connect / global mouse+key).
+// Only acts when the box count actually changed, and refuses to wipe existing
+// rows to zero during the brief post-load settling window (when a connected
+// builder may not have restored its boxes yet).
+function checkAndSync(node) {
+  const count = getBboxCount(node);
+  if (count === null) return;
+  if (count === node.__k2lastBboxCount) return;
+
+  if (
+    count === 0 &&
+    readRegions(node).length > 0 &&
+    node.__k2loadGuardUntil &&
+    Date.now() < node.__k2loadGuardUntil
+  ) {
+    return; // load-race guard: don't clear rows before the builder restores
+  }
+
+  node.__k2lastBboxCount = count;
+  syncRegionCount(node, count);
+}
+
+// Global backstop: box edits happen inside the builder's own canvas/dock, which
+// doesn't reliably repaint OUR node. Every builder change ends on a mouseup
+// (it dispatches one on commit), and deletions come via Del/Backspace, so we
+// re-check all our nodes on those events. Registered once per page.
+function installGlobalResync(app) {
+  if (window.__k2RegionSyncHooked) return;
+  window.__k2RegionSyncHooked = true;
+  const resyncAll = () => {
+    const nodes = app.graph?._nodes || [];
+    for (const n of nodes) {
+      if (n.type === NODE_TYPE) checkAndSync(n);
+    }
+  };
+  window.addEventListener("mouseup", () => setTimeout(resyncAll, 0), true);
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (e.key === "Delete" || e.key === "Backspace") setTimeout(resyncAll, 0);
+    },
+    true
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -177,10 +234,11 @@ function rebuildRows(node) {
 // ---------------------------------------------------------------------------
 
 app.registerExtension({
-  name: "krea2.RegionalMultiLoRA",
+  name: "fedor.Krea2RegionalMultiLoRA",
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name !== NODE_TYPE) return;
     await ensureLoraList();
+    installGlobalResync(app);
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
@@ -203,11 +261,15 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function (o) {
       const r = onConfigure ? onConfigure.apply(this, arguments) : undefined;
       this.__k2lastBboxCount = null;
+      // Protect the restored rows from being cleared to zero while a connected
+      // builder is still restoring its own boxes during graph load.
+      this.__k2loadGuardUntil = Date.now() + 2500;
       setTimeout(() => rebuildRows(this), 0);
       return r;
     };
 
-    // Immediate sync when the bboxes wire is connected or removed.
+    // onConnectionsChange fires when the bboxes wire is connected or removed.
+    // Do an immediate sync so the row count adjusts without waiting for a draw.
     const onConnectionsChange = nodeType.prototype.onConnectionsChange;
     nodeType.prototype.onConnectionsChange = function (type, index, connected, link_info) {
       const r = onConnectionsChange
@@ -216,30 +278,22 @@ app.registerExtension({
 
       const bboxIdx = this.inputs?.findIndex((i) => i.name === "bboxes");
       if (index === bboxIdx) {
-        this.__k2lastBboxCount = null;
-        setTimeout(() => {
-          const count = getBboxCount(this);
-          if (count !== null) {
-            this.__k2lastBboxCount = count;
-            syncRegionCount(this, count);
-          }
-        }, 50);
+        this.__k2lastBboxCount = null; // force re-check
+        // A fresh manual wire is a deliberate user action, not load - drop the
+        // guard so connecting an empty builder can still show zero rows.
+        if (connected) this.__k2loadGuardUntil = 0;
+        setTimeout(() => checkAndSync(this), 50);
       }
       return r;
     };
 
-    // Detect box add/remove in the connected builder. The __k2lastBboxCount
-    // cache means we only act when the count actually changes, so the
-    // per-frame cost is just two property lookups.
+    // onDrawForeground is one of several triggers (see installGlobalResync).
+    // The __k2lastBboxCount cache means we only act when the count actually
+    // changes, so the per-frame cost is just a couple of property lookups.
     const onDrawForeground = nodeType.prototype.onDrawForeground;
     nodeType.prototype.onDrawForeground = function (ctx) {
       if (onDrawForeground) onDrawForeground.apply(this, arguments);
-
-      const count = getBboxCount(this);
-      if (count !== null && count !== this.__k2lastBboxCount) {
-        this.__k2lastBboxCount = count;
-        syncRegionCount(this, count);
-      }
+      checkAndSync(this);
     };
   },
 });
