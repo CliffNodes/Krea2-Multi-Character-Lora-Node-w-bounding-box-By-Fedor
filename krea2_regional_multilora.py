@@ -151,10 +151,15 @@ def _norm_key(s):
 
 
 def _load_lora_matrices(path):
-    """{ module_sig: {'down':T, 'up':T, 'scale':float} } in fp32 on CPU.
-    Handles kohya (lora_down/up + alpha) and diffusers (lora_A/B)."""
+    """{ module_sig: entry } in fp32 on CPU.
+    LoRA entry: {'kind':'lora', 'down':T, 'up':T, 'scale':float}
+      - kohya (lora_down/up + alpha) and diffusers (lora_A/B).
+    LoKr entry: {'kind':'lokr', 'w1':T, 'w2':T, 'scale':float}
+      - Kronecker factors (ai-toolkit / LyCORIS), direct or a@b decomposed.
+        Full weight diff = kron(w1, w2); applied efficiently in the hook."""
     sd = safetensors.torch.load_file(path)
     groups = {}
+    lokr_groups = {}
     alphas = {}
     for k, v in sd.items():
         if k.endswith(".alpha") or k.endswith("alpha"):
@@ -169,6 +174,10 @@ def _load_lora_matrices(path):
         if m:
             groups.setdefault(m.group(1), {})["up"] = v.float()
             continue
+        m = re.search(r"(.*?)\.(lokr_w1|lokr_w1_a|lokr_w1_b|lokr_w2|lokr_w2_a|lokr_w2_b|lokr_t2)$", k)
+        if m:
+            lokr_groups.setdefault(m.group(1), {})[m.group(2)] = v.float()
+            continue
 
     out = {}
     for base, mats in groups.items():
@@ -178,9 +187,44 @@ def _load_lora_matrices(path):
         rank = down.shape[0]
         alpha = alphas.get(base, alphas.get(base + ".alpha", float(rank)))
         out[_norm_key(base)] = {
+            "kind": "lora",
             "down": down,
             "up": up,
             "scale": float(alpha) / float(rank),
+        }
+
+    for base, mats in lokr_groups.items():
+        if "lokr_t2" in mats:
+            logging.warning("[Krea2RegionalMultiLoRA] '%s' uses tucker LoKr (conv); "
+                            "skipping module %s.", path, base)
+            continue
+        # Rebuild each factor (direct tensor or a @ b decomposition). Alpha
+        # scaling follows ComfyUI's LoKrAdapter: alpha/rank only when a
+        # decomposed side exists, else 1.0.
+        dim = None
+        if "lokr_w1" in mats:
+            w1 = mats["lokr_w1"]
+        elif "lokr_w1_a" in mats and "lokr_w1_b" in mats:
+            w1 = mats["lokr_w1_a"] @ mats["lokr_w1_b"]
+            dim = mats["lokr_w1_b"].shape[0]
+        else:
+            continue
+        if "lokr_w2" in mats:
+            w2 = mats["lokr_w2"]
+        elif "lokr_w2_a" in mats and "lokr_w2_b" in mats:
+            w2 = mats["lokr_w2_a"] @ mats["lokr_w2_b"]
+            dim = mats["lokr_w2_b"].shape[0]
+        else:
+            continue
+        if w1.dim() != 2 or w2.dim() != 2:
+            continue
+        alpha = alphas.get(base, None)
+        scale = (alpha / dim) if (alpha is not None and dim is not None) else 1.0
+        out[_norm_key(base)] = {
+            "kind": "lokr",
+            "w1": w1,
+            "w2": w2,
+            "scale": float(scale),
         }
     return out
 
@@ -215,9 +259,21 @@ def _rect_token_mask(rows, cols, nx0, ny0, nx1, ny1, feather):
 # ---------------------------------------------------------------------------
 # forward-time injection session
 # ---------------------------------------------------------------------------
+def _lokr_delta(xf, w1_d, w2_d):
+    """Efficient kron(w1, w2) @ x without materializing the full weight.
+    Mirrors ComfyUI's LoKrAdapter.h(): group input by w1's inner dim, apply
+    w2 per group, then mix groups with w1."""
+    uq = w1_d.shape[1]
+    hg = xf.reshape(*xf.shape[:-1], uq, -1)          # [..., uq, in_n]
+    hb = torch.nn.functional.linear(hg, w2_d)        # [..., uq, out_k]
+    hc = torch.nn.functional.linear(hb.transpose(-1, -2), w1_d)  # [..., out_k, out_l]
+    return hc.transpose(-1, -2).reshape(*xf.shape[:-1], -1)      # [..., out_l*out_k]
+
+
 def _make_hook(session, entries):
-    """entries = [(region_idx, {'down_d','up_d'}), ...] for ONE Linear.
-    out += sum_i mask_i * (x @ down_i.T @ up_i.T)   (scale folded into up_d)."""
+    """entries = [(region_idx, prepared_entry), ...] for ONE Linear.
+    LoRA:  out += mask_i * (x @ down_i.T @ up_i.T)   (scale folded into up_d)
+    LoKr:  out += mask_i * (kron(w1_i, w2_i) @ x)    (scale folded into w1_d)"""
     def hook(module, inp, out):
         if not torch.is_tensor(out) or out.dim() < 2:
             return out
@@ -228,7 +284,10 @@ def _make_hook(session, entries):
         xf = x.to(_COMPUTE_DTYPE)
         res = None
         for ridx, d in entries:
-            delta = (xf @ d["down_d"].t()) @ d["up_d"].t()
+            if d["kind"] == "lokr":
+                delta = _lokr_delta(xf, d["w1_d"], d["w2_d"])
+            else:
+                delta = (xf @ d["down_d"].t()) @ d["up_d"].t()
             masked = session._full_mask(ridx, seq, out.dim()) * delta
             res = masked if res is None else res + masked
         if res is None:
@@ -318,10 +377,15 @@ class _RegionalSession:
         self._dev = dev
         for name, (mod, entries) in self._layer_map.items():
             for ridx, d in entries:
-                if "down_d" in d:
+                if "down_d" in d or "w1_d" in d:
                     continue
-                d["down_d"] = d["down"].to(dev, cdt)
-                d["up_d"] = d["up"].to(dev, cdt) * d["scale"]
+                if d["kind"] == "lokr":
+                    # delta is linear in w1, so fold scale*strength into it
+                    d["w1_d"] = d["w1"].to(dev, cdt) * d["scale"]
+                    d["w2_d"] = d["w2"].to(dev, cdt)
+                else:
+                    d["down_d"] = d["down"].to(dev, cdt)
+                    d["up_d"] = d["up"].to(dev, cdt) * d["scale"]
         rows, cols, src = self._resolve_grid(x)
         self.n_img = rows * cols
         masks = self._build_masks_now(rows, cols)
@@ -530,12 +594,14 @@ class Krea2RegionalMultiLoRA:
             # per-region shallow copy with per-region scale (so the same file can
             # be used at different strengths in different regions)
             mats = {
-                sig: {"down": d["down"], "up": d["up"], "scale": d["scale"] * s}
+                sig: {**{k: v for k, v in d.items() if k != "scale"},
+                      "scale": d["scale"] * s}
                 for sig, d in base_mats.items()
             }
             if not mats:
-                logging.warning("[Krea2RegionalMultiLoRA] '%s' contains no A/B LoRA pairs "
-                                "(raw-diff files belong in a normal LoraLoader, not here).", r["lora"])
+                logging.warning("[Krea2RegionalMultiLoRA] '%s' contains no LoRA (A/B) or "
+                                "LoKr (kron factor) pairs - raw-diff files belong in a "
+                                "normal LoraLoader, not here.", r["lora"])
             region_loras.append(mats)
 
         patched = model.clone()

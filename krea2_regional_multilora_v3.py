@@ -260,12 +260,13 @@ class Krea2RegionalMultiLoRAV3:
             s = r["strength"] * float(base_strength)
             strength_eff.append(s)
             mats = {
-                sig: {"down": d["down"], "up": d["up"], "scale": d["scale"] * s}
+                sig: {**{k: v for k, v in d.items() if k != "scale"},
+                      "scale": d["scale"] * s}
                 for sig, d in base_mats.items()
             }
             if not mats:
-                logging.warning("[Krea2RegionalMultiLoRAV3] '%s' contains no A/B LoRA pairs.",
-                                r["lora"])
+                logging.warning("[Krea2RegionalMultiLoRAV3] '%s' contains no LoRA (A/B) "
+                                "or LoKr (kron factor) pairs.", r["lora"])
             region_loras.append(mats)
 
         patched = model.clone()
