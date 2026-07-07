@@ -157,7 +157,7 @@ So the workflow is a single, unified layout tool: sketch the whole scene as boxe
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/CliffNodes/ComfyUI-Krea2-Regional-MultiLoRA.git
+git clone https://github.com/CliffNodes/Krea2-Multi-Character-Lora-Node-w-bounding-box-By-Fedor.git
 ```
 
 Restart ComfyUI. The nodes appear under the `Krea2/By Fedor` category:
@@ -208,11 +208,24 @@ VAELoader ──┘                                     ▲
 
 2. **Draw one box per character**, in order (left to right is the natural convention). Each box should cover roughly where that person's face and upper body will land. As you draw, **rows appear automatically** in the Krea2 node.
 
-3. **Assign a LoRA to each row** in the Krea2 node. Row 1 → box 1, row 2 → box 2, and so on. Set each row's strength (0.8–1.2 is the usable range).
+3. **Assign a LoRA to each row** in the Krea2 node. Row 1 → box 1, row 2 → box 2, and so on. Set each row's strength to **1.5 or higher** — a masked regional LoRA needs more push than a normal full-image LoRA (see [Key Recommendations](#key-recommendations)).
 
 4. **Sampler settings** for Krea 2 Turbo: `euler` / `bong_tangent` / 8–12 steps / **CFG 1.0**. The negative conditioning is zeroed out — Krea 2 is designed to run at CFG 1.
 
 5. **Queue.**
+
+---
+
+## Key Recommendations
+
+The settings that make the biggest difference in practice:
+
+- **LoRA strength: 1.5 or higher.** A regional LoRA is masked to a fraction of the image and has to establish a full identity in that smaller area, so it needs more push than a normal full-image LoRA. Start each row at **1.5** and go up if the likeness is weak. The usual global-LoRA range (~1.0) tends to look washed out once it's masked.
+- **Match `canvas_width` / `canvas_height` across the prompt builder (node 5) and this node (node 6).** Boxes are stored in the builder's pixel space and re-normalized against this node's canvas size. If the two don't match, every box lands in the wrong place and the masks drift off your subjects. In the example workflow they're wired together for exactly this reason — keep them wired, or set both to the same values (and to your actual generation resolution).
+- **Keep `split_mode` on `bbox` when you're drawing boxes.** `auto_vertical` / `auto_horizontal` ignore your boxes and just cut the canvas into equal strips — fine for a quick test, but they won't follow anything you drew.
+- **Region order = box order.** Row 1 pairs with the first box, row 2 with the second, and so on. If a character comes out generic, it's almost always a mismatched order.
+- **Boxes should cover each character's face/upper body, and not overlap.** Leave a small gap between boxes (or a little `seam_feather`) so the identities stay cleanly separated.
+- **Reference images (v3): `ref_strength` 0.2–0.4, window 0 → ~0.6.** Enough to lock identity early without copying the reference's exact pose. Crop refs to the face if you want likeness without the framing.
 
 ---
 
@@ -221,7 +234,7 @@ VAELoader ──┘                                     ▲
 | Input | Notes |
 |-------|-------|
 | `model` / `clip` | From your loaders (or a global LoRA loader first). |
-| `canvas_width` / `canvas_height` | Wire from the box builder's width/height. Used to interpret pixel-space boxes. |
+| `canvas_width` / `canvas_height` | Used to re-normalize the pixel-space boxes. **Must match the prompt builder's width/height** or the masks land in the wrong place — wire them straight from the builder (as in the example). |
 | `regions_json` | The source of truth for the region list. The `+ Add Region` / `remove` buttons and box auto-sync edit this for you — you rarely touch it directly. |
 | `split_mode` | `bbox` = use the drawn boxes (default). `auto_vertical` / `auto_horizontal` = split the canvas into equal strips, no boxes needed. |
 | `seam_feather` | Edge softness (fraction of the token grid). `0.08` default. Raise toward `0.15` if you see hard seams. |
