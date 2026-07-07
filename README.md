@@ -64,6 +64,32 @@ The v3 example workflow is at `example_workflows/krea2_regional_multilora_v3.jso
 
 ---
 
+## Recent fixes
+
+**LoKr (Kronecker) LoRA support.** Newer training runs (e.g. recent ai-toolkit
+builds) can output **LoKr** files, which store Kronecker factors
+(`lokr_w1` / `lokr_w2`) instead of the usual `lora_A` / `lora_B` pairs. The
+loader previously recognized only the A/B form, so a LoKr file matched **0
+layers and silently did nothing** — the LoRA appeared "not to work" even though
+everything loaded without error. The loader now parses LoKr factors (direct or
+`a @ b`-decomposed; tucker/conv variants are skipped) and the forward hook
+applies `kron(w1, w2) · x` efficiently via grouped linears — the same identity
+ComfyUI's own LoKr adapter uses, verified numerically against the materialized
+Kronecker product (max error ~3e-7) across every layer geometry, including the
+asymmetric attention projections. Standard LoRAs are unaffected. If a file has
+neither A/B nor LoKr pairs (e.g. a raw-diff safety-bypass file), it's still
+skipped with a clear warning — those belong in a normal LoRA loader.
+
+**Reliable box → region-row sync.** When a bounding-box builder is wired in, the
+region rows now track box creation/deletion reliably, including deleting the
+last box (which previously left a stale row). The sync reads the builder's live
+box array instead of its serialized string (which lags edits and goes empty at
+zero boxes), re-checks on mouse-up and Delete/Backspace so edits register even
+when this node isn't the one being redrawn, and guards against clearing your
+rows during workflow load before the builder has restored its boxes.
+
+---
+
 ## The Problem
 
 If you've tried loading two character LoRAs at once with a normal LoRA loader, you already know what happens: the two identities smear into each other. You ask for "Alice on the left, Bob on the right" and you get one person who's a 50/50 blend of both, in both spots.
